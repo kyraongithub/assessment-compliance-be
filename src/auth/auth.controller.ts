@@ -32,18 +32,20 @@ export class AuthController {
     const { access_token } = this.authService.generateToken(req.user);
 
     // Option A: Redirect to frontend with token in query param
-    // res.redirect(`${process.env.FRONTEND_URL}/auth/callback?token=${access_token}`);
+    res.redirect(
+      `${process.env.FRONTEND_URL}/auth/callback?token=${access_token}`,
+    );
 
     // Option B: Return JSON (easier for development)
-    return res.json({
-      access_token,
-      user: {
-        id: req.user.id,
-        email: req.user.email,
-        name: req.user.name,
-        role: req.user.role,
-      },
-    });
+    // return res.json({
+    //   access_token,
+    //   user: {
+    //     id: req.user.id,
+    //     email: req.user.email,
+    //     name: req.user.name,
+    //     role: req.user.role,
+    //   },
+    // });
   }
 
   /**

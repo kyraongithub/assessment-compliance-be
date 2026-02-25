@@ -17,8 +17,19 @@ export class TemplatesService {
     @InjectQueue(PDF_QUEUE) private pdfQueue: Queue,
   ) {}
 
+  private splitIntoChunks(text: string, maxChars = 12000): string[] {
+    const chunks: string[] = [];
+    let start = 0;
+
+    while (start < text.length) {
+      chunks.push(text.slice(start, start + maxChars));
+      start += maxChars;
+    }
+
+    return chunks;
+  }
+
   async uploadTemplate(dto: UploadTemplateDto, fileBuffer: Buffer) {
-    // ── Step 1: Parse PDF to text ────────────────────────────────────────────
     const pdfData = await pdfParse(fileBuffer);
     const pdfText = pdfData.text;
 
@@ -26,7 +37,6 @@ export class TemplatesService {
       throw new Error('PDF appears to be empty or unreadable');
     }
 
-    // ── Step 2: Create template record with PROCESSING status ────────────────
     const template = await this.prisma.assessmentTemplate.create({
       data: {
         title: dto.title,
@@ -35,20 +45,22 @@ export class TemplatesService {
       },
     });
 
-    // ── Step 3: Enqueue PDF processing job ───────────────────────────────────
+    const chunks = this.splitIntoChunks(pdfText);
+
     const payload: PdfJobPayload = {
       templateId: template.id,
-      pdfText,
+      chunks,
     };
 
     await this.pdfQueue.add(PDF_JOB, payload, {
-      jobId: `template-${template.id}`, // Prevent duplicate jobs
+      jobId: `template-${template.id}`,
     });
 
     return {
       templateId: template.id,
       title: template.title,
       status: template.status,
+      chunks: chunks.length,
     };
   }
 
@@ -74,13 +86,7 @@ export class TemplatesService {
       include: {
         categories: {
           include: {
-            requirements: {
-              select: {
-                id: true,
-                title: true,
-                description: true,
-              },
-            },
+            requirements: true,
           },
         },
         _count: {

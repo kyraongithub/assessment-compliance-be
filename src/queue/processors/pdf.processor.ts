@@ -1,7 +1,7 @@
 import { Process, Processor } from '@nestjs/bull';
 import { Logger } from '@nestjs/common';
 import { Job } from 'bull';
-import { AiService } from '../../ai/ai.service';
+import { AiService, ExtractedDocument } from '../../ai/ai.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PusherService } from '../../pusher/pusher.service';
 
@@ -10,7 +10,7 @@ export const PDF_JOB = 'process-pdf';
 
 export interface PdfJobPayload {
   templateId: string;
-  pdfText: string;
+  chunks: string[];
 }
 
 @Processor(PDF_QUEUE)
@@ -23,20 +23,44 @@ export class PdfProcessor {
     private pusherService: PusherService,
   ) {}
 
+  private mergeResults(results: ExtractedDocument[]): ExtractedDocument {
+    return {
+      title: results[0]?.title || 'Extracted Document',
+      categories: results.flatMap((r) => r.categories),
+    };
+  }
+
   @Process(PDF_JOB)
   async handlePdfProcessing(job: Job<PdfJobPayload>) {
-    const { templateId, pdfText } = job.data;
-    this.logger.log(`Processing PDF job for template: ${templateId}`);
+    const { templateId, chunks } = job.data;
+
+    this.logger.log(
+      `Processing template ${templateId} with ${chunks.length} chunks`,
+    );
 
     try {
-      // ── Step 1: Extract requirements via OpenAI ──────────────────────────
-      await job.progress(10);
-      const extracted = await this.aiService.extractRequirements(pdfText);
-      this.logger.log(`AI extraction done for template: ${templateId}`);
+      const allResults: ExtractedDocument[] = [];
 
-      // ── Step 2: Persist categories and requirements to DB ────────────────
-      await job.progress(50);
+      let progress = 10;
 
+      for (let i = 0; i < chunks.length; i++) {
+        this.logger.log(`Processing chunk ${i + 1}/${chunks.length}`);
+
+        const result = await this.aiService.extractRequirements(chunks[i]);
+        allResults.push(result);
+
+        progress = 10 + Math.floor((i / chunks.length) * 60);
+        await job.progress(progress);
+
+        // Anti-TPM burst protection
+        await new Promise((res) => setTimeout(res, 1200));
+      }
+
+      const extracted = this.mergeResults(allResults);
+
+      await job.progress(75);
+
+      // Save incrementally
       for (const categoryData of extracted.categories) {
         const category = await this.prisma.category.create({
           data: {
@@ -45,7 +69,6 @@ export class PdfProcessor {
           },
         });
 
-        // Bulk create requirements for this category
         await this.prisma.requirement.createMany({
           data: categoryData.requirements.map((req) => ({
             title: req.title,
@@ -55,9 +78,6 @@ export class PdfProcessor {
         });
       }
 
-      this.logger.log(`DB insert complete for template: ${templateId}`);
-
-      // ── Step 3: Update template status to AVAILABLE ──────────────────────
       await job.progress(90);
 
       await this.prisma.assessmentTemplate.update({
@@ -65,7 +85,6 @@ export class PdfProcessor {
         data: { status: 'AVAILABLE' },
       });
 
-      // ── Step 4: Notify admin via Pusher ──────────────────────────────────
       await this.pusherService.trigger('admin-channel', 'TEMPLATE_READY', {
         templateId,
         status: 'AVAILABLE',
@@ -77,27 +96,21 @@ export class PdfProcessor {
       });
 
       await job.progress(100);
-      this.logger.log(`✅ Template ${templateId} processing complete`);
+      this.logger.log(`✅ Template ${templateId} completed`);
     } catch (error) {
-      this.logger.error(
-        `❌ Failed to process template ${templateId}: ${error.message}`,
-      );
+      this.logger.error(`❌ Failed template ${templateId}: ${error.message}`);
 
-      // Mark template as FAILED so admin knows something went wrong
-      await this.prisma.assessmentTemplate
-        .update({
-          where: { id: templateId },
-          data: { status: 'FAILED' },
-        })
-        .catch(() => {}); // Swallow error if template already deleted
+      await this.prisma.assessmentTemplate.update({
+        where: { id: templateId },
+        data: { status: 'FAILED' },
+      });
 
-      // Notify admin of failure via Pusher
       await this.pusherService.trigger('admin-channel', 'TEMPLATE_FAILED', {
         templateId,
         error: error.message,
       });
 
-      throw error; // Re-throw so Bull marks job as failed
+      throw error;
     }
   }
 }
