@@ -1,0 +1,111 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String       @id @default(cuid())
+  email         String       @unique
+  name          String?
+  role          Role         @default(USER)
+  assessments   Assessment[]
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+}
+
+model AssessmentTemplate {
+  id          String         @id @default(cuid())
+  title       String
+  description String?        @db.Text 
+  status      TemplateStatus @default(PROCESSING)
+  pdfUrl      String?
+  categories  Category[]
+  assessments Assessment[]
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+}
+
+model Category {
+  id           String             @id @default(cuid())
+  name         String
+  templateId   String
+  template     AssessmentTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  requirements Requirement[]
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  @@index([templateId])
+}
+
+model Requirement {
+  id          String      @id @default(cuid())
+  title       String
+  description String      @db.Text
+  categoryId  String
+  category    Category    @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  submissions Submission[]
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@index([categoryId])
+}
+
+model Assessment {
+  id          String             @id @default(cuid())
+  userId      String
+  templateId  String
+  status      AssessmentStatus   @default(IN_PROGRESS)
+  user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  template    AssessmentTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  submissions Submission[]
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  @@index([userId])
+  @@index([templateId])
+}
+
+model Submission {
+  id                   String       @id @default(cuid())
+  assessmentId         String
+  requirementId        String
+  implementationDetail String?      @db.Text
+  evidenceLink         String?
+  status               ReviewStatus @default(PENDING)
+  reviewNote           String?      @db.Text  
+  assessment           Assessment   @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  requirement          Requirement  @relation(fields: [requirementId], references: [id], onDelete: Cascade)
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+
+  @@unique([assessmentId, requirementId])
+  @@index([assessmentId])
+  @@index([requirementId])
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum TemplateStatus {
+  PROCESSING
+  AVAILABLE
+  FAILED
+}
+
+enum AssessmentStatus {
+  IN_PROGRESS
+  SUBMITTED
+  REVIEWED
+}
+
+enum ReviewStatus {
+  PENDING
+  COMPLIANT
+  REJECTED
+}
