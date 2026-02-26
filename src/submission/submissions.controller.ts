@@ -23,7 +23,7 @@ export class SubmissionsController {
    * User upserts their answer for a specific requirement
    */
   @Put()
-  @Roles(Role.USER)
+  // @Roles(Role.USER)
   @ApiOperation({ summary: 'Save/update submission for a requirement' })
   upsert(@CurrentUser() user: User, @Body() dto: UpsertSubmissionDto) {
     return this.submissionsService.upsert(user.id, dto);
